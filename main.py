@@ -1,5 +1,7 @@
 import requests
 import time
+from flask import Flask
+import threading
 
 TELEGRAM_TOKEN = '8186161874:AAE_7I2Zw9eWKOkkttsXuuv6UX04ctIINHg'
 CHAT_ID = '306517061'
@@ -71,5 +73,21 @@ def monitorar():
         analisar_jogos(jogos_alertados)
         time.sleep(60)
 
-# Iniciar
+# ---------------------------
+# Adição para manter o bot ativo no Render
+# ---------------------------
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "Bot está rodando no Render!"
+
+def start_flask():
+    app.run(host="0.0.0.0", port=10000)
+
+# Inicia o Flask em segundo plano
+threading.Thread(target=start_flask).start()
+
+# Inicia o monitoramento
 monitorar()
