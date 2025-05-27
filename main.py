@@ -4,10 +4,11 @@ from flask import Flask
 import threading
 import os
 
-# Pegando variáveis do ambiente
+# Variáveis de ambiente (configure no Render)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+# Envia mensagens para o Telegram
 def enviar_alerta_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {'chat_id': CHAT_ID, 'text': mensagem}
@@ -15,6 +16,7 @@ def enviar_alerta_telegram(mensagem):
     if resposta.status_code != 200:
         print("Erro ao enviar alerta:", resposta.text)
 
+# Busca jogos ao vivo da API da SofaScore
 def buscar_jogos_ao_vivo():
     url = "https://api.sofascore.com/api/v1/sport/football/events/live"
     resposta = requests.get(url)
@@ -24,6 +26,7 @@ def buscar_jogos_ao_vivo():
         print(f"Erro ao buscar jogos: {resposta.status_code}")
         return []
 
+# Verifica se o mandante é favorito com base nas odds
 def mandante_favorito(event_id):
     try:
         url = f"https://api.sofascore.com/api/v1/event/{event_id}/odds/1/all"
@@ -32,11 +35,13 @@ def mandante_favorito(event_id):
             return None
         dados = r.json()
 
-        for casa_apostas in dados.get('markets', []):
-            if casa_apostas.get('marketName') == 'Match Winner':
-                opcoes = casa_apostas.get('outcomes', [])
-                odd_mandante = next((o['odds'] for o in opcoes if o['label'] == '1'), None)
-                odd_visitante = next((o['odds'] for o in opcoes if o['label'] == '2'), None)
+        for mercado in dados.get('markets', []):
+            if mercado.get('marketName') == 'Match Winner':
+                opcoes = mercado.get('outcomes', [])
+                print(f"Odds para o jogo {event_id}:", opcoes)  # Debug
+
+                odd_mandante = next((o['odds'] for o in opcoes if o.get('label') in ['1', 'home']), None)
+                odd_visitante = next((o['odds'] for o in opcoes if o.get('label') in ['2', 'away']), None)
 
                 if odd_mandante is not None and odd_visitante is not None:
                     return odd_mandante < odd_visitante
@@ -45,6 +50,7 @@ def mandante_favorito(event_id):
         print(f"Erro ao buscar odds para {event_id}: {e}")
         return None
 
+# Verifica se algum jogo atende aos critérios e envia alerta
 def analisar_jogos(jogos_alertados):
     jogos = buscar_jogos_ao_vivo()
     for jogo in jogos:
@@ -55,19 +61,21 @@ def analisar_jogos(jogos_alertados):
             placar_visitante = jogo["awayScore"]["current"]
             jogo_id = jogo["id"]
 
-            if (placar_mandante - placar_visitante) >= 2 and jogo_id not in jogos_alertados:
-                favorito = mandante_favorito(jogo_id)
-                if favorito:
-                    link = f"https://www.sofascore.com/{mandante.lower().replace(' ', '-')}-vs-{visitante.lower().replace(' ', '-')}/{jogo['customId']}"
-                    mensagem = f"{mandante} {placar_mandante} x {placar_visitante} {visitante} — Mandante abriu 2 gols de vantagem (e era favorito)\n{link}"
-                    print("Enviando alerta:", mensagem)
-                    enviar_alerta_telegram(mensagem)
-                    jogos_alertados.add(jogo_id)
-                else:
-                    print(f"{mandante} x {visitante}: mandante não era favorito.")
+            if (placar_mandante - placar_visitante) >= 2:
+                if jogo_id not in jogos_alertados:
+                    favorito = mandante_favorito(jogo_id)
+                    if favorito:
+                        link = f"https://www.sofascore.com/{mandante.lower().replace(' ', '-')}-vs-{visitante.lower().replace(' ', '-')}/{jogo['customId']}"
+                        mensagem = f"⚠️ Alerta de Jogo com {placar_mandante}x{placar_visitante}!\n{mandante} está vencendo com 2 gols de vantagem e era o favorito.\n\nVer ao vivo: {link}"
+                        print("Enviando alerta:", mensagem)
+                        enviar_alerta_telegram(mensagem)
+                        jogos_alertados.add(jogo_id)
+                    else:
+                        print(f"{mandante} x {visitante}: mandante não era favorito.")
         except Exception as e:
             print("Erro ao processar jogo:", e)
 
+# Loop contínuo de monitoramento
 def monitorar():
     jogos_alertados = set()
     print("Monitoramento iniciado. Verificando a cada 1 minuto...")
@@ -75,20 +83,16 @@ def monitorar():
         analisar_jogos(jogos_alertados)
         time.sleep(60)
 
-# ---------------------------
-# Parte para manter o bot ativo no Render
-# ---------------------------
+# Servidor Flask (para manter Render acordado)
 app = Flask(__name__)
 
 @app.route('/')
 def index():
     return "Bot está rodando no Render!"
 
-def iniciar_flask():
+# Iniciar monitoramento em segundo plano
+threading.Thread(target=monitorar, daemon=True).start()
+
+# Iniciar Flask (fica como processo principal)
+if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000)
-
-# Iniciar o Flask em segundo plano
-threading.Thread(target=iniciar_flask).start()
-
-# Iniciar o monitoramento
-monitorar()
